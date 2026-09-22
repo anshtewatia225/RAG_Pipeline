@@ -1,31 +1,31 @@
 # RAG Pipeline
 
-PDF/Text ingestion and retrieval-augmented generation pipeline using FastAPI, LangChain, FAISS, Groq, and LangSmith.
+PDF/Text ingestion and retrieval-augmented generation pipeline. Upload documents, ask questions, get AI-powered answers grounded in your content.
+
+**Live:** https://rag-pipeline-ovwp.onrender.com
 
 ## Stack
 
-- **FastAPI** - REST API
-- **LangChain** - Document loading, text splitting, chaining
-- **FAISS** - Vector similarity search (persistent)
-- **Google Gemini** - Embeddings (`gemini-embedding-2-preview`)
-- **Groq** - LLM inference (`openai/gpt-oss-120b`)
-- **LangSmith** - Tracing and observability
+| Component | Technology | Purpose |
+|-----------|-----------|---------|
+| API | FastAPI | REST endpoints |
+| Orchestration | LangChain | Loaders, splitters, chains |
+| Vector Store | FAISS | Cosine similarity search |
+| Embeddings | Google Gemini (`gemini-embedding-2-preview`) | 3072-dim vectors |
+| LLM | Groq (`openai/gpt-oss-120b`) | Answer generation |
+| Tracing | LangSmith | Observability |
 
-## Setup
-
-### 1. Clone and install
+## Quick Start (Local)
 
 ```bash
+git clone https://github.com/YOUR_USERNAME/RAG_Pipeline.git
 cd RAG_Pipeline
 python -m venv venv
-venv\Scripts\activate        # Windows
-# source venv/bin/activate   # macOS/Linux
+venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2. Configure environment
-
-Create `.env` in the project root:
+Create `.env`:
 
 ```
 GOOGLE_API_KEY=your-google-api-key
@@ -36,106 +36,82 @@ LANGSMITH_TRACING=true
 LANGSMITH_ENDPOINT=https://apac.api.smith.langchain.com
 ```
 
-### 3. Start the server
+Run:
 
 ```bash
 python -m app.main
 ```
 
-Server runs at `http://localhost:8000`.
+Server: `http://localhost:8000`
 
-## API Endpoints
+## API
 
-### POST /ingest
+Base URL: `https://rag-pipeline-ovwp.onrender.com`
 
-Upload one or more PDF or text files. Chunks them and stores in FAISS.
+### Health Check
 
-**Postman setup:**
-- Method: `POST`
-- URL: `http://localhost:8000/ingest`
-- Body > form-data:
-  - `files` (File) - select one or more PDF/TXT/MD files
-  - `chunk_size` (Text) - default `500`
-  - `chunk_overlap` (Text) - default `50`
-  - `collection_name` (Text) - default `rag_documents`
-
-**Example response:**
-```json
-{
-  "status": "success",
-  "files_ingested": ["document.pdf"],
-  "total_chunks": 42,
-  "chunk_config": {"chunk_size": 500, "chunk_overlap": 50},
-  "collection": "rag_documents"
-}
+```
+GET /health
 ```
 
-### POST /query
+### Ingest Files
 
-Ask a question. Retrieves relevant chunks and generates an answer.
+```
+POST /ingest
+Content-Type: multipart/form-data
+```
 
-**Postman setup:**
-- Method: `POST`
-- URL: `http://localhost:8000/query`
-- Body > raw > JSON:
+| Field | Type | Required | Default |
+|-------|------|----------|---------|
+| `files` | File[] | Yes | — |
+| `chunk_size` | int | No | 500 |
+| `chunk_overlap` | int | No | 50 |
+| `collection_name` | string | No | rag_documents |
+
+### Query
+
+```
+POST /query
+Content-Type: application/json
+```
+
 ```json
 {
-  "question": "What is the main topic of the document?",
+  "question": "What is this document about?",
   "top_k": 5,
   "collection_name": "rag_documents"
 }
 ```
 
-**Example response:**
-```json
-{
-  "answer": "The document discusses...",
-  "sources": [
-    {
-      "chunk_index": 1,
-      "source": "document.pdf",
-      "distance": 0.3421,
-      "text": "First few lines of the chunk..."
-    }
-  ],
-  "retrieval_latency_ms": 120.5,
-  "llm_latency_ms": 850.3,
-  "total_latency_ms": 970.8,
-  "chunks_retrieved": 5,
-  "top_k": 5
-}
+### List Collections
+
+```
+GET /collections
 ```
 
-### GET /collections
+### Collection Stats
 
-List all FAISS collections.
+```
+GET /collections/{name}/stats
+```
 
-**Postman:** `GET http://localhost:8000/collections`
+### Delete Collection
 
-### GET /collections/{name}/stats
+```
+DELETE /collections/{name}
+```
 
-Get chunk count for a collection.
+## Postman
 
-**Postman:** `GET http://localhost:8000/collections/rag_documents/stats`
+Import `RAG_Pipeline.postman_collection.json` into Postman. All endpoints pre-configured with the live URL.
 
-### DELETE /collections/{name}
+## Tracing
 
-Delete a collection.
-
-**Postman:** `DELETE http://localhost:8000/collections/rag_documents`
-
-## LangSmith Tracing
-
-Every query is automatically traced. View in the LangSmith dashboard:
+Every query is traced in LangSmith:
 
 1. Go to https://smith.langchain.com
-2. Click **Tracing** in the left sidebar
-3. Select project `rag-pipeline`
-4. Each trace shows:
-   - Retrieval latency
-   - Number of chunks retrieved
-   - LLM call details
-   - Source documents
+2. Click **Tracing** → select `rag-pipeline`
+3. View retrieval latency, chunks, LLM calls, sources
 
 ## Project Structure
 
@@ -147,10 +123,29 @@ RAG_Pipeline/
 │   ├── config.py             # Settings and clients
 │   ├── rag_pipeline.py       # Ingestion and query logic
 │   └── vector_store.py       # FAISS wrapper
-├── faiss_indexes/            # Persistent vector storage
+├── faiss_indexes/            # Vector storage (ephemeral on Render)
 ├── requirements.txt
-├── .env                      # API keys
+├── render.yaml               # Render deployment config
+├── .env
 ├── .gitignore
 ├── RAG_Pipeline.postman_collection.json
 └── README.md
 ```
+
+## How It Works
+
+```
+Upload → Load (PyPDF/Text) → Chunk (500/50) → Embed (Gemini) → Store (FAISS)
+                                                                           ↓
+Question → Embed (Gemini) → FAISS Search → Top-K Chunks → LLM (Groq) → Answer
+```
+
+## Deploy on Render
+
+1. Push to GitHub
+2. Render > New > Web Service
+3. Connect repo, set start command: `python -m app.main`
+4. Add environment variables
+5. Deploy
+
+**Note:** FAISS indexes are ephemeral on Render's free tier. Re-ingest after each restart.
