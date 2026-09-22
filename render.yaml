@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: rag-pipeline
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.main
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13"
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: LANGSMITH_API_KEY
+        sync: false
+      - key: LANGSMITH_PROJECT
+        value: "rag-pipeline"
+      - key: LANGSMITH_TRACING
+        value: "true"

@@ -1,0 +1,13 @@
+venv/
+.env
+__pycache__/
+*.pyc
+faiss_indexes/
+walkthrough.md
+*.egg-info/
+dist/
+build/
+.vscode/
+.idea/
+*.swp
+*.swo
