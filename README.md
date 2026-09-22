@@ -124,42 +124,6 @@ Delete a collection.
 
 **Postman:** `DELETE http://localhost:8000/collections/rag_documents`
 
-### POST /experiment/chunk-sizes
-
-Ingest files with two chunk configs (500/50 and 1000/100) for comparison.
-
-**Postman setup:**
-- Method: `POST`
-- URL: `http://localhost:8000/experiment/chunk-sizes`
-- Body > form-data:
-  - `files` (File) - select files
-  - `collection_prefix` (Text) - optional, default `experiment`
-
-Creates `experiment_500_50` and `experiment_1000_100` collections. Query each to compare precision in LangSmith.
-
-## Chunk Size Experimentation
-
-### Via API
-
-```bash
-# Ingest with both configs
-POST /experiment/chunk-sizes with your files
-
-# Query small chunks
-POST /query {"question": "...", "collection_name": "experiment_500_50"}
-
-# Query large chunks
-POST /query {"question": "...", "collection_name": "experiment_1000_100"}
-```
-
-### Via script
-
-```bash
-python experiments/chunk_size_comparison.py path/to/file.pdf "Your question here"
-```
-
-Results are logged to `experiments/results.json` and traced in LangSmith.
-
 ## LangSmith Tracing
 
 Every query is automatically traced. View in the LangSmith dashboard:
@@ -183,13 +147,10 @@ RAG_Pipeline/
 │   ├── config.py             # Settings and clients
 │   ├── rag_pipeline.py       # Ingestion and query logic
 │   └── vector_store.py       # FAISS wrapper
-├── experiments/
-│   └── chunk_size_comparison.py
 ├── faiss_indexes/            # Persistent vector storage
 ├── requirements.txt
-├── .env                      # API keys (not committed)
+├── .env                      # API keys
 ├── .gitignore
-├── walkthrough.md
 ├── RAG_Pipeline.postman_collection.json
 └── README.md
 ```

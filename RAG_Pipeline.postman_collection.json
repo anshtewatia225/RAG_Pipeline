@@ -8,14 +8,14 @@
       "name": "Health Check",
       "request": {
         "method": "GET",
-        "url": "http://localhost:8000/health"
+        "url": "https://rag-pipeline-ovwp.onrender.com/health"
       }
     },
     {
       "name": "Ingest PDF",
       "request": {
         "method": "POST",
-        "url": "http://localhost:8000/ingest",
+        "url": "https://rag-pipeline-ovwp.onrender.com/ingest",
         "body": {
           "mode": "formdata",
           "formdata": [
@@ -32,7 +32,7 @@
       "name": "Query",
       "request": {
         "method": "POST",
-        "url": "http://localhost:8000/query",
+        "url": "https://rag-pipeline-ovwp.onrender.com/query",
         "header": [
           {
             "key": "Content-Type",
@@ -49,38 +49,21 @@
       "name": "List Collections",
       "request": {
         "method": "GET",
-        "url": "http://localhost:8000/collections"
+        "url": "https://rag-pipeline-ovwp.onrender.com/collections"
       }
     },
     {
       "name": "Collection Stats",
       "request": {
         "method": "GET",
-        "url": "http://localhost:8000/collections/rag_documents/stats"
+        "url": "https://rag-pipeline-ovwp.onrender.com/collections/rag_documents/stats"
       }
     },
     {
       "name": "Delete Collection",
       "request": {
         "method": "DELETE",
-        "url": "http://localhost:8000/collections/rag_documents"
-      }
-    },
-    {
-      "name": "Experiment Chunk Sizes",
-      "request": {
-        "method": "POST",
-        "url": "http://localhost:8000/experiment/chunk-sizes",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\n  \"question\": \"What is this document about?\"\n}"
-        }
+        "url": "https://rag-pipeline-ovwp.onrender.com/collections/rag_documents"
       }
     }
   ]

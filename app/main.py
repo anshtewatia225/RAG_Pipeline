@@ -110,61 +110,6 @@ def delete_collection(name: str):
     return {"status": "deleted", "collection": name}
 
 
-@app.post("/experiment/chunk-sizes")
-async def run_chunk_experiment(
-    files: list[UploadFile] = File(...),
-    collection_prefix: str = Form(default="experiment"),
-):
-    configs = [
-        {"chunk_size": 500, "chunk_overlap": 50},
-        {"chunk_size": 1000, "chunk_overlap": 100},
-    ]
-
-    results = []
-
-    for config in configs:
-        suffix = f"{config['chunk_size']}_{config['chunk_overlap']}"
-        collection_name = f"{collection_prefix}_{suffix}"
-
-        tmp_dir = tempfile.mkdtemp()
-        file_paths = []
-        file_names = []
-        try:
-            for file in files:
-                file_path = os.path.join(tmp_dir, file.filename)
-                with open(file_path, "wb") as f:
-                    content = await file.read()
-                    f.write(content)
-                file_paths.append(file_path)
-                file_names.append(file.filename)
-
-            pipeline = RAGPipeline(collection_name=collection_name)
-            ingest_result = pipeline.ingest_documents(
-                file_paths=file_paths,
-                file_names=file_names,
-                chunk_size=config["chunk_size"],
-                chunk_overlap=config["chunk_overlap"],
-                collection_name=collection_name,
-            )
-
-            results.append(
-                {
-                    "config": config,
-                    "collection": collection_name,
-                    "ingestion": ingest_result,
-                }
-            )
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-
-    return {
-        "status": "experiment_complete",
-        "configs_tested": configs,
-        "results": results,
-        "message": "Collections created. Use /query with each collection_name to compare retrieval precision in LangSmith.",
-    }
-
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
