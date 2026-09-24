@@ -1,33 +1,64 @@
 # RAG Pipeline
 
-PDF/Text ingestion and retrieval-augmented generation pipeline. Upload documents, ask questions, get AI-powered answers grounded in your content.
+A full-stack, production-ready **Retrieval-Augmented Generation (RAG)** application. Upload documents (PDF, TXT, MD, Python), ask natural language questions, and receive grounded, cited AI answers powered by high-dimensional embeddings and ultra-fast LLM inference.
 
-**Live:** https://rag-pipeline-ovwp.onrender.com
+**Backend Live:** [https://rag-pipeline-ovwp.onrender.com](https://rag-pipeline-ovwp.onrender.com)
 
-## Stack
+---
 
+## Tech Stack
+
+### Backend
 | Component | Technology | Purpose |
-|-----------|-----------|---------|
-| API | FastAPI | REST endpoints |
-| Orchestration | LangChain | Loaders, splitters, chains |
-| Vector Store | FAISS | Cosine similarity search |
-| Embeddings | Google Gemini (`gemini-embedding-2-preview`) | 3072-dim vectors |
-| LLM | Groq (`openai/gpt-oss-120b`) | Answer generation |
-| Tracing | LangSmith | Observability |
+|---|---|---|
+| Framework | FastAPI | Asynchronous REST API endpoints |
+| Orchestration | LangChain | Document loading, text splitting, prompt chains |
+| Vector Store | FAISS | In-memory & disk-persisted cosine similarity search |
+| Embeddings | Google Gemini (`gemini-embedding-2-preview`) | 3072-dimensional document embeddings |
+| LLM | Groq (`openai/gpt-oss-120b`) | Sub-second generative response synthesis |
+| Observability | LangSmith | Trace-level latency, chunk retrieval, and token monitoring |
 
-## Quick Start (Local)
+### Frontend
+| Component | Technology | Purpose |
+|---|---|---|
+| Framework | Next.js 16 (App Router) & React 19 | Responsive server & client-side UI |
+| Styling | Tailwind CSS v4 & Custom Design Tokens | Sleek dark-mode aesthetic with glassmorphism |
+| Markdown & Tables | React Markdown, Remark GFM, Rehype Raw | Formatted tables, code blocks, lists, and line breaks |
+| Document Management | Secondary Sidebar | Auto-ingestion dropzone, live progress, and file management |
 
+---
+
+## Features
+
+- **Secondary Document Sidebar**: Upload files via drag-and-drop or file picker with instant auto-ingestion (no separate ingest button needed).
+- **Rich Markdown Answers**: Formatted tables, syntax-styled blocks, bold text, and numbered citations rendered cleanly.
+- **One-Click Answer Copying**: Built-in clipboard copying with instant visual feedback.
+- **Live Observability & Metadata**: Per-response latency breakdown (retrieval vs. LLM vs. total), chunk counts, and source references.
+- **Session Cleanliness**: Automated index reset on page refresh and a manual **Clear** button to purge vector storage across sessions.
+- **Granular Document Control**: Delete individual documents directly from the sidebar, automatically removing their chunks from the FAISS vector index.
+
+---
+
+## Quick Start (Local Setup)
+
+### 1. Clone Repository
 ```bash
 git clone https://github.com/YOUR_USERNAME/RAG_Pipeline.git
 cd RAG_Pipeline
+```
+
+### 2. Backend Setup
+```powershell
+# Create and activate virtual environment
 python -m venv venv
-venv\Scripts\activate
+.\venv\Scripts\Activate.ps1   # On Windows (or source venv/bin/activate on Unix)
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-Create `.env`:
-
-```
+Create a `.env` file in the root directory:
+```env
 GOOGLE_API_KEY=your-google-api-key
 GROQ_API_KEY=your-groq-api-key
 LANGSMITH_API_KEY=your-langsmith-api-key
@@ -36,82 +67,20 @@ LANGSMITH_TRACING=true
 LANGSMITH_ENDPOINT=https://apac.api.smith.langchain.com
 ```
 
-Run:
-
-```bash
-python -m app.main
+Run the backend server:
+```powershell
+.\venv\Scripts\python -m app.main
 ```
+Backend API will be running at `http://localhost:8000`.
 
-Server: `http://localhost:8000`
-
-## API
-
-Base URL: `https://rag-pipeline-ovwp.onrender.com`
-
-### Health Check
-
+### 3. Frontend Setup
+In a new terminal window:
+```powershell
+cd frontend
+npm install
+npm run dev
 ```
-GET /health
-```
-
-### Ingest Files
-
-```
-POST /ingest
-Content-Type: multipart/form-data
-```
-
-| Field | Type | Required | Default |
-|-------|------|----------|---------|
-| `files` | File[] | Yes | — |
-| `chunk_size` | int | No | 500 |
-| `chunk_overlap` | int | No | 50 |
-| `collection_name` | string | No | rag_documents |
-
-### Query
-
-```
-POST /query
-Content-Type: application/json
-```
-
-```json
-{
-  "question": "What is this document about?",
-  "top_k": 5,
-  "collection_name": "rag_documents"
-}
-```
-
-### List Collections
-
-```
-GET /collections
-```
-
-### Collection Stats
-
-```
-GET /collections/{name}/stats
-```
-
-### Delete Collection
-
-```
-DELETE /collections/{name}
-```
-
-## Postman
-
-Import `RAG_Pipeline.postman_collection.json` into Postman. All endpoints pre-configured with the live URL.
-
-## Tracing
-
-Every query is traced in LangSmith:
-
-1. Go to https://smith.langchain.com
-2. Click **Tracing** → select `rag-pipeline`
-3. View retrieval latency, chunks, LLM calls, sources
+Frontend will be running at `http://localhost:3000`.
 
 ## Project Structure
 
@@ -119,33 +88,86 @@ Every query is traced in LangSmith:
 RAG_Pipeline/
 ├── app/
 │   ├── __init__.py
-│   ├── main.py              # FastAPI endpoints
-│   ├── config.py             # Settings and clients
-│   ├── rag_pipeline.py       # Ingestion and query logic
-│   └── vector_store.py       # FAISS wrapper
-├── faiss_indexes/            # Vector storage (ephemeral on Render)
-├── requirements.txt
-├── render.yaml               # Render deployment config
-├── .env
+│   ├── config.py              # Environment variables & client setup
+│   ├── main.py                # FastAPI routes & request handling
+│   ├── rag_pipeline.py        # LangChain text splitting, prompts & chains
+│   └── vector_store.py        # FAISS vector store & disk persistence
+├── frontend/
+│   ├── src/
+│   │   ├── app/
+│   │   │   ├── favicon.ico
+│   │   │   ├── globals.css    # Dark theme tokens, glassmorphism & prose styling
+│   │   │   ├── layout.tsx     # Root layout & theme wrapper
+│   │   │   └── page.tsx       # Main page layout (Sidebar + Chat)
+│   │   ├── components/
+│   │   │   ├── Chat.tsx       # Chat interface, ReactMarkdown & metrics
+│   │   │   ├── Nav.tsx        # Top navigation & theme toggle
+│   │   │   ├── Sidebar.tsx    # Auto-upload dropzone & document manager
+│   │   │   └── ThemeProvider.tsx # Dark/Light theme provider
+│   │   └── lib/
+│   │       ├── api.ts         # Frontend API client (ingest, query, delete, clear)
+│   │       └── types.ts       # TypeScript interfaces for API payloads
+│   ├── next.config.ts
+│   ├── package.json
+│   └── tsconfig.json
+├── faiss_indexes/             # Persistent local vector storage
+├── requirements.txt           # Python dependencies
+├── render.yaml                # Render deployment configuration
+├── RAG_Pipeline.postman_collection.json # Postman test collection
+├── walkthrough.md             # In-depth technical architecture breakdown
+├── .env                       # Environment variables (API keys)
 ├── .gitignore
-├── RAG_Pipeline.postman_collection.json
 └── README.md
 ```
 
-## How It Works
+---
+
+## Architecture Flow
 
 ```
-Upload → Load (PyPDF/Text) → Chunk (500/50) → Embed (Gemini) → Store (FAISS)
-                                                                           ↓
-Question → Embed (Gemini) → FAISS Search → Top-K Chunks → LLM (Groq) → Answer
+Document Upload (.pdf, .txt, .md, .py)
+   │
+   ▼
+Chunking (RecursiveCharacterTextSplitter: 500 chars / 50 overlap)
+   │
+   ▼
+Embedding (Google Gemini: gemini-embedding-2-preview, 3072 dims)
+   │
+   ▼
+Vector Index (FAISS IndexFlatIP + L2 Normalization)
+   │
+   ├───────────────────────────────┐
+   ▼                               ▼
+Natural Language Query         Cosine Similarity Search (Top-K Chunks)
+   │                               │
+   └───────────────┬───────────────┘
+                   ▼
+Prompt Construction with Context & Instructions
+                   │
+                   ▼
+Inference & Generation (Groq: openai/gpt-oss-120b)
+                   │
+                   ▼
+Clean Markdown Response + Latency Breakdown & Source Citations
 ```
 
-## Deploy on Render
+---
 
-1. Push to GitHub
-2. Render > New > Web Service
-3. Connect repo, set start command: `python -m app.main`
-4. Add environment variables
-5. Deploy
+## Observability & Tracing
 
-**Note:** FAISS indexes are ephemeral on Render's free tier. Re-ingest after each restart.
+Every query is automatically traced in LangSmith:
+1. Log in to [LangSmith](https://smith.langchain.com).
+2. Select the `rag-pipeline` project.
+3. Inspect chunk similarity scores, token counts, retrieval latencies, and LLM execution steps in real time.
+
+---
+
+## Deployment (Render)
+
+1. Push your repository to GitHub.
+2. In Render, select **New > Web Service** and link your repository.
+3. Configure the build and start commands:
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `python -m app.main`
+4. Add your environment variables (`GOOGLE_API_KEY`, `GROQ_API_KEY`, `LANGSMITH_API_KEY`, etc.).
+5. Deploy.

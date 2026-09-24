@@ -3,6 +3,7 @@ import shutil
 import tempfile
 from typing import Optional
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from app.rag_pipeline import RAGPipeline
@@ -13,6 +14,14 @@ app = FastAPI(
     title="RAG Pipeline API",
     description="PDF/Text ingestion and retrieval-augmented generation pipeline",
     version="1.0.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -105,9 +114,26 @@ def collection_stats(name: str):
 
 @app.delete("/collections/{name}")
 def delete_collection(name: str):
-    store = VectorStore()
+    store = VectorStore(collection_name=name)
     store.delete_collection(name)
     return {"status": "deleted", "collection": name}
+
+
+@app.post("/clear")
+@app.delete("/clear")
+def clear_all(collection_name: Optional[str] = None):
+    col = collection_name or DEFAULT_COLLECTION
+    store = VectorStore(collection_name=col)
+    store.clear()
+    return {"status": "cleared", "collection": col}
+
+
+@app.delete("/documents/{file_name}")
+def delete_document(file_name: str, collection_name: Optional[str] = None):
+    col = collection_name or DEFAULT_COLLECTION
+    store = VectorStore(collection_name=col)
+    result = store.delete_document(file_name)
+    return {"status": "deleted", "file_name": file_name, **result}
 
 
 if __name__ == "__main__":

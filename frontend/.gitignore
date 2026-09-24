@@ -1,0 +1,14 @@
+# Ignore env files but keep .env.example
+.env*
+!.env.example
+
+# next.js
+/.next/
+/out/
+
+# deps
+/node_modules
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts

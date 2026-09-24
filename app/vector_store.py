@@ -64,6 +64,39 @@ class VectorStore:
         with open(self._meta_path, "w") as f:
             json.dump({"documents": self._documents, "metadatas": self._metadatas}, f)
 
+    def clear(self):
+        self._documents = []
+        self._metadatas = []
+        self._index = faiss.IndexFlatIP(3072)
+        if os.path.exists(self._index_dir):
+            shutil.rmtree(self._index_dir)
+        os.makedirs(self._index_dir, exist_ok=True)
+        self._save()
+
+    def delete_document(self, file_name: str) -> dict:
+        filtered_docs = []
+        filtered_metas = []
+        for doc, meta in zip(self._documents, self._metadatas):
+            if meta.get("file_name") != file_name and meta.get("source") != file_name:
+                filtered_docs.append(doc)
+                filtered_metas.append(meta)
+
+        if len(filtered_docs) == 0:
+            self.clear()
+            return {"remaining_chunks": 0}
+
+        embeddings = self._embedding_fn.embed_documents(filtered_docs)
+        vectors = np.array(embeddings, dtype=np.float32)
+        faiss.normalize_L2(vectors)
+        new_index = faiss.IndexFlatIP(3072)
+        new_index.add(vectors)
+
+        self._index = new_index
+        self._documents = filtered_docs
+        self._metadatas = filtered_metas
+        self._save()
+        return {"remaining_chunks": len(self._documents)}
+
     def get_collection_stats(self) -> dict:
         return {"collection": self.collection_name, "total_chunks": self._index.ntotal}
 
@@ -80,3 +113,7 @@ class VectorStore:
         path = os.path.join(FAISS_INDEX_DIR, target)
         if os.path.exists(path):
             shutil.rmtree(path)
+        if target == self.collection_name:
+            self._documents = []
+            self._metadatas = []
+            self._index = faiss.IndexFlatIP(3072)

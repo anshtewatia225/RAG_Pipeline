@@ -97,6 +97,17 @@ class RAGPipeline:
         source_metadatas = results["metadatas"]
         distances = results["distances"]
 
+        if not context_chunks:
+            return {
+                "answer": "No documents have been uploaded yet. Please upload a document in the sidebar to begin asking questions.",
+                "sources": [],
+                "retrieval_latency_ms": round(retrieval_time * 1000, 2),
+                "llm_latency_ms": 0,
+                "total_latency_ms": round(retrieval_time * 1000, 2),
+                "chunks_retrieved": 0,
+                "top_k": top_k,
+            }
+
         context_text = "\n\n---\n\n".join(context_chunks)
 
         prompt = ChatPromptTemplate.from_template(
