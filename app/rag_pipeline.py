@@ -5,7 +5,6 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
 from app.config import get_llm, get_tracer
 from app.vector_store import VectorStore
 
@@ -124,12 +123,7 @@ Answer:"""
 
         llm = get_llm()
 
-        chain = (
-            {"context": RunnablePassthrough(), "question": RunnablePassthrough()}
-            | prompt
-            | llm
-            | StrOutputParser()
-        )
+        chain = prompt | llm | StrOutputParser()
 
         llm_start = time.time()
         answer = chain.invoke(
