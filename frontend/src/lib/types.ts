@@ -22,3 +22,26 @@ export interface IngestResponse {
   chunk_config: { chunk_size: number; chunk_overlap: number };
   collection: string;
 }
+
+export interface Message {
+  role: "user" | "assistant";
+  content: string;
+  sources?: Source[];
+}
+
+export interface IngestedFile {
+  name: string;
+  chunks: number;
+  collection: string;
+  status: "ingesting" | "done" | "error";
+  error?: string;
+  progress?: number;
+}
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  messages: Message[];
+  files: IngestedFile[];
+  createdAt: number;
+}

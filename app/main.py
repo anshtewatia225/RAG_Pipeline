@@ -27,6 +27,9 @@ app.add_middleware(
 )
 
 
+from fastapi.responses import JSONResponse, StreamingResponse
+import json
+
 class QueryRequest(BaseModel):
     question: str
     top_k: int = 5
@@ -36,6 +39,38 @@ class QueryRequest(BaseModel):
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
+
+
+@app.post("/query/stream")
+async def stream_query_documents(request: QueryRequest):
+    try:
+        pipeline = RAGPipeline(
+            collection_name=request.collection_name or DEFAULT_COLLECTION
+        )
+        
+        async def event_generator():
+            # First yield the sources / metadata
+            res_dict = pipeline.query_metadata_only(
+                question=request.question,
+                top_k=request.top_k,
+                collection_name=request.collection_name,
+            )
+            yield f"data: {json.dumps({'type': 'metadata', **res_dict})}\n\n"
+            
+            # Then stream the answer tokens
+            async for chunk in pipeline.query_stream(
+                question=request.question,
+                top_k=request.top_k,
+                collection_name=request.collection_name,
+            ):
+                yield f"data: {json.dumps({'type': 'token', 'content': chunk})}\n\n"
+            
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @app.post("/ingest")

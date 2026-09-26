@@ -70,6 +70,35 @@ export async function query(
   );
 }
 
+export async function* queryStream(
+  question: string,
+  opts: { topK?: number; collectionName?: string } = {}
+): AsyncIterableIterator<string> {
+  const response = await fetch(`${API_URL}/query/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      question,
+      top_k: opts.topK ?? 5,
+      collection_name: opts.collectionName || null,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(response.statusText);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) return;
+
+  const decoder = new TextDecoder();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    yield decoder.decode(value, { stream: true });
+  }
+}
+
 export async function clearAll(collectionName: string = "rag_documents"): Promise<{ status: string }> {
   try {
     const res = await fetch(`${API_URL}/clear${collectionName ? `?collection_name=${encodeURIComponent(collectionName)}` : ""}`, {

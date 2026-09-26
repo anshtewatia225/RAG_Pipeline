@@ -1,25 +1,46 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
-import { query } from "@/lib/api";
-import type { QueryResponse } from "@/lib/types";
+import type { Message, Source } from "@/lib/types";
 
-interface Message {
-  role: "user" | "assistant";
-  content: string;
-  data?: QueryResponse;
+interface ChatProps {
+  chatId: string;
+  collectionName: string;
+  initialMessages: Message[];
+  onMessagesChange: (messages: Message[]) => void;
 }
 
-export function Chat() {
-  const [messages, setMessages] = useState<Message[]>([]);
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+const SUGGESTED_QUERIES = [
+  "Summarize the uploaded document",
+  "What are the key technical takeaways?",
+  "Explain the core architecture",
+  "List key functions and endpoints",
+];
+
+export function Chat({ chatId, collectionName, initialMessages, onMessagesChange }: ChatProps) {
+  const [messages, setMessages] = useState<Message[]>(initialMessages || []);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const updateMessages = (newMessages: Message[] | ((prev: Message[]) => Message[])) => {
+    setMessages((prev) => {
+      const updated = typeof newMessages === "function" ? newMessages(prev) : newMessages;
+      // Schedule parent update in next microtask / tick to prevent render-phase updates
+      setTimeout(() => {
+        onMessagesChange(updated);
+      }, 0);
+      return updated;
+    });
+  };
 
   const copyMessage = (text: string, index: number) => {
     navigator.clipboard.writeText(text);
@@ -27,237 +48,206 @@ export function Chat() {
     setTimeout(() => setCopiedIndex(null), 2000);
   };
 
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages, loading]);
-
-  const send = async () => {
-    const q = input.trim();
+  const triggerSend = async (queryText: string) => {
+    const q = queryText.trim();
     if (!q || loading) return;
 
-    setMessages((m) => [...m, { role: "user", content: q }]);
+    const nextMessages = [...messages, { role: "user" as const, content: q }, { role: "assistant" as const, content: "" }];
+    updateMessages(nextMessages);
     setInput("");
     setLoading(true);
     setError(null);
 
     try {
-      const res = await query(q);
-      setMessages((m) => [...m, { role: "assistant", content: res.answer, data: res }]);
+      const response = await fetch(`${API_URL}/query/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: q,
+          top_k: 5,
+          collection_name: collectionName,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server returned status ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No reader available");
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let accumulatedContent = "";
+      let currentSources: Source[] = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.substring(6));
+              if (data.type === "metadata") {
+                currentSources = data.sources || [];
+              } else if (data.type === "token") {
+                accumulatedContent += data.content;
+                updateMessages((prev) => {
+                  const copy = [...prev];
+                  copy[copy.length - 1] = {
+                    role: "assistant",
+                    content: accumulatedContent,
+                    sources: currentSources,
+                  };
+                  return copy;
+                });
+              }
+            } catch (err) {
+              console.error("Failed to parse SSE line:", err);
+            }
+          }
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Query failed");
+      updateMessages((prev) => prev.slice(0, -1));
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full flex-1 overflow-hidden">
       {/* Messages Area */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-1 pb-4">
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto pr-3 space-y-6 pb-4"
+      >
         {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-20 gap-4">
-            {/* Empty State Icon */}
+          <div className="flex flex-col items-center justify-center h-full py-12 gap-5">
             <div
-              className="w-16 h-16 rounded-2xl flex items-center justify-center"
+              className="w-16 h-16 rounded-2xl flex items-center justify-center shadow-lg"
               style={{
-                background: "linear-gradient(135deg, rgba(99,102,241,0.1), rgba(139,92,246,0.1))",
-                border: "1px solid rgba(99,102,241,0.15)",
+                background: "linear-gradient(135deg, rgba(99,102,241,0.2), rgba(139,92,246,0.2))",
+                border: "1px solid rgba(99,102,241,0.3)",
               }}
             >
-              <svg className="w-7 h-7" style={{ color: "var(--accent-1)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <svg className="w-7 h-7 text-[var(--accent-1)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
               </svg>
             </div>
-            <div className="text-center">
-              <p className="text-sm font-medium" style={{ color: "var(--text-secondary)" }}>
-                Ask a question about your documents
+            <div className="text-center max-w-md">
+              <p className="text-base font-semibold text-white">
+                How can I help you with your documents?
               </p>
-              <p className="text-xs mt-1" style={{ color: "var(--text-tertiary)" }}>
-                Upload files in the sidebar, then start chatting
+              <p className="text-xs text-[var(--text-tertiary)] mt-1.5 leading-relaxed">
+                Upload files in the sidebar and ask questions to retrieve precise answers powered by neural retrieval.
               </p>
             </div>
-          </div>
-        )}
 
-        <div className="space-y-4">
-          {messages.map((m, i) => (
-            <div
-              key={i}
-              className={`flex ${m.role === "user" ? "justify-end" : "justify-start"} msg-enter`}
-              style={{ animationDelay: `${i * 0.05}s` }}
-            >
-              <div className="flex items-start gap-2.5 max-w-[85%]">
-                {/* Assistant avatar */}
-                {m.role === "assistant" && (
-                  <div
-                    className="w-7 h-7 rounded-lg shrink-0 flex items-center justify-center mt-1"
-                    style={{
-                      background: "linear-gradient(135deg, rgba(99,102,241,0.15), rgba(139,92,246,0.15))",
-                      border: "1px solid rgba(99,102,241,0.2)",
-                    }}
-                  >
-                    <svg className="w-3.5 h-3.5" style={{ color: "var(--accent-1)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                    </svg>
-                  </div>
-                )}
-
-                <div
-                  className={`${m.role === "user" ? "msg-user" : "msg-assistant"} px-4 py-3`}
+            {/* 2x2 Grid of Suggested Queries */}
+            <div className="grid grid-cols-2 gap-3.5 w-full max-w-xl mt-4">
+              {SUGGESTED_QUERIES.map((query, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => triggerSend(query)}
+                  className="text-left p-4 rounded-xl glass-panel hover:border-[var(--accent-1)] hover:bg-[rgba(99,102,241,0.08)] transition-all flex items-center justify-between group"
+                  style={{ background: "rgba(255, 255, 255, 0.02)" }}
                 >
-                  {m.role === "user" ? (
-                    <p className="text-sm whitespace-pre-wrap leading-relaxed text-white">
-                      {m.content}
-                    </p>
-                  ) : (
-                    <div className="prose">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        rehypePlugins={[rehypeRaw]}
-                      >
-                        {m.content}
-                      </ReactMarkdown>
-                    </div>
-                  )}
-
-                  {/* Sources */}
-                  {m.data && m.data.sources.length > 0 && (
-                    <details className="mt-3 pt-3" style={{ borderTop: "1px solid var(--border-default)" }}>
-                      <summary
-                        className="cursor-pointer text-xs font-medium flex items-center gap-1.5 select-none transition-colors"
-                        style={{ color: "var(--text-tertiary)" }}
-                      >
-                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                        </svg>
-                        {m.data.sources.length} source{m.data.sources.length !== 1 ? "s" : ""}
-                      </summary>
-                      <ul className="mt-2.5 space-y-2">
-                        {m.data.sources.map((s, j) => (
-                          <li key={j} className="source-chip">
-                            <p className="text-xs font-medium mb-1" style={{ color: "var(--accent-1)" }}>
-                              {s.source}
-                            </p>
-                            <p className="text-xs leading-relaxed" style={{ color: "var(--text-tertiary)" }}>
-                              {s.text}
-                            </p>
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
-                  )}
-
-                  {/* Badges & Copy button */}
-                  {m.role === "assistant" && (
-                    <div className="mt-2.5 flex items-center justify-between gap-2 pt-1.5" style={{ borderTop: "1px solid var(--border-subtle)" }}>
-                      <div className="flex items-center gap-2">
-                        {m.data && (
-                          <>
-                            <span className="badge">
-                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                              </svg>
-                              {m.data.total_latency_ms}ms
-                            </span>
-                            <span className="badge">
-                              {m.data.chunks_retrieved} chunks
-                            </span>
-                          </>
-                        )}
-                      </div>
-                      <button
-                        onClick={() => copyMessage(m.content, i)}
-                        className="text-xs flex items-center gap-1 text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors py-0.5 px-1.5 rounded"
-                        title="Copy answer"
-                      >
-                        {copiedIndex === i ? (
-                          <>
-                            <svg className="w-3 h-3 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                            </svg>
-                            <span className="text-[11px] text-green-400 font-medium">Copied</span>
-                          </>
-                        ) : (
-                          <>
-                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                            </svg>
-                            <span className="text-[11px]">Copy</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          ))}
-
-          {/* Typing Indicator */}
-          {loading && (
-            <div className="flex justify-start msg-enter">
-              <div className="flex items-start gap-2.5">
-                <div
-                  className="w-7 h-7 rounded-lg shrink-0 flex items-center justify-center"
-                  style={{
-                    background: "linear-gradient(135deg, rgba(99,102,241,0.15), rgba(139,92,246,0.15))",
-                    border: "1px solid rgba(99,102,241,0.2)",
-                  }}
-                >
-                  <svg className="w-3.5 h-3.5" style={{ color: "var(--accent-1)" }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  <span className="text-xs font-medium text-[var(--text-secondary)] group-hover:text-white transition-colors">
+                    {query}
+                  </span>
+                  <svg className="w-4 h-4 text-[var(--text-tertiary)] group-hover:text-[var(--accent-1)] transition-colors shrink-0 ml-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                   </svg>
-                </div>
-                <div className="msg-assistant px-5 py-4">
-                  <div className="flex gap-1.5">
-                    <span className="typing-dot" />
-                    <span className="typing-dot" />
-                    <span className="typing-dot" />
-                  </div>
-                </div>
-              </div>
+                </button>
+              ))}
             </div>
-          )}
-        </div>
-
-        {/* Error */}
-        {error && (
-          <div
-            className="flex items-center gap-2 px-4 py-3 rounded-xl text-sm mt-4 mx-auto max-w-md"
-            style={{
-              background: "rgba(239, 68, 68, 0.08)",
-              border: "1px solid rgba(239, 68, 68, 0.2)",
-              color: "#f87171",
-            }}
-          >
-            <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            {error}
           </div>
         )}
+
+        {messages.map((m, i) => (
+          <div
+            key={i}
+            className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+          >
+            <div className={`max-w-[85%] ${m.role === "user" ? "msg-user" : "msg-assistant"}`}>
+              {m.role === "user" ? (
+                <p className="text-sm whitespace-pre-wrap leading-relaxed text-white">
+                  {m.content}
+                </p>
+              ) : (
+                <div className="prose text-sm max-w-none">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    rehypePlugins={[rehypeRaw]}
+                  >
+                    {m.content}
+                  </ReactMarkdown>
+                  {loading && i === messages.length - 1 && !m.content && (
+                    <div className="flex gap-1.5 py-1">
+                      <span className="typing-dot" />
+                      <span className="typing-dot" />
+                      <span className="typing-dot" />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Sources */}
+              {m.sources && m.sources.length > 0 && (
+                <details className="mt-4 pt-3 border-t border-[var(--border-default)]">
+                  <summary className="cursor-pointer text-xs font-medium text-[var(--text-secondary)] hover:text-white transition-colors flex items-center gap-1.5 select-none">
+                    <svg className="w-3.5 h-3.5 text-[var(--accent-1)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                    </svg>
+                    {m.sources.length} Source{m.sources.length !== 1 ? "s" : ""} Retrieved
+                  </summary>
+                  <div className="mt-2.5 space-y-2">
+                    {m.sources.map((s, j) => (
+                      <div key={j} className="p-2.5 rounded-lg bg-black/20 border border-[var(--border-subtle)] text-xs">
+                        <span className="font-semibold text-[var(--accent-1)]">{s.source}</span>
+                        <p className="text-[var(--text-secondary)] mt-1 leading-relaxed">{s.text}</p>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </div>
+          </div>
+        ))}
       </div>
 
-      {/* Input Area */}
-      <div className="pt-3 pb-1" style={{ borderTop: "1px solid var(--border-default)" }}>
-        <div className="flex items-center gap-2.5">
-          <div className="flex-1 relative">
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && send()}
-              placeholder="Ask a question about your documents..."
-              className="input-glass w-full pr-4"
-              disabled={loading}
-            />
-          </div>
+      {/* Error banner */}
+      {error && (
+        <div className="mb-3 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs">
+          {error}
+        </div>
+      )}
+
+      {/* Input Form */}
+      <div className="pt-2">
+        <div className="flex items-center gap-3">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && triggerSend(input)}
+            placeholder="Ask a question about your documents..."
+            className="flex-1 glass-input text-sm"
+            disabled={loading}
+          />
           <button
-            onClick={send}
+            onClick={() => triggerSend(input)}
             disabled={!input.trim() || loading}
-            className="btn-primary shrink-0 flex items-center gap-1.5 !px-5 !py-3"
+            className="btn-primary shrink-0 flex items-center gap-2"
           >
+            <span>Send</span>
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
             </svg>

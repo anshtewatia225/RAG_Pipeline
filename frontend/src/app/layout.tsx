@@ -31,7 +31,6 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full flex flex-col">
         <ThemeProvider>
-          <Nav />
           <main className="flex-1 relative">{children}</main>
         </ThemeProvider>
       </body>

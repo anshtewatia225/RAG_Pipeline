@@ -81,6 +81,76 @@ class RAGPipeline:
             "collection": collection_name or self.vector_store.collection_name,
         }
 
+    def query_metadata_only(
+        self,
+        question: str,
+        top_k: int = 5,
+        collection_name: Optional[str] = None,
+    ) -> dict:
+        start_time = time.time()
+        results = self.vector_store.query(question, top_k=top_k)
+        retrieval_time = time.time() - start_time
+
+        context_chunks = results["documents"]
+        source_metadatas = results["metadatas"]
+        distances = results["distances"]
+
+        sources = []
+        for i, (doc, meta, dist) in enumerate(
+            zip(context_chunks, source_metadatas, distances)
+        ):
+            sources.append(
+                {
+                    "chunk_index": i + 1,
+                    "source": meta.get("source", "unknown"),
+                    "distance": round(dist, 4),
+                    "text": doc[:300] + "..." if len(doc) > 300 else doc,
+                }
+            )
+
+        return {
+            "sources": sources,
+            "retrieval_latency_ms": round(retrieval_time * 1000, 2),
+            "chunks_retrieved": len(context_chunks),
+            "top_k": top_k,
+        }
+
+    async def query_stream(
+        self,
+        question: str,
+        top_k: int = 5,
+        collection_name: Optional[str] = None,
+    ):
+        results = self.vector_store.query(question, top_k=top_k)
+        context_chunks = results["documents"]
+
+        if not context_chunks:
+            yield "No documents have been uploaded yet. Please upload a document in the sidebar to begin asking questions."
+            return
+
+        context_text = "\n\n---\n\n".join(context_chunks)
+
+        prompt = ChatPromptTemplate.from_template(
+            """You are a helpful AI assistant. Answer the question based on the following context.
+If the context doesn't contain enough information, say so honestly.
+
+Context:
+{context}
+
+Question: {question}
+
+Answer:"""
+        )
+
+        llm = get_llm()
+        chain = prompt | llm | StrOutputParser()
+
+        async for chunk in chain.astream(
+            {"context": context_text, "question": question},
+            config={"callbacks": [self.tracer]},
+        ):
+            yield chunk
+
     def query(
         self,
         question: str,
