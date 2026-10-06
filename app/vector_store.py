@@ -39,6 +39,9 @@ class VectorStore:
         self._save()
 
     def query(self, query_text: str, top_k: int = 5) -> dict:
+        if self._index.ntotal == 0:
+            return {"documents": [], "metadatas": [], "distances": []}
+
         query_embedding = self._embedding_fn.embed_query(query_text)
         query_vector = np.array([query_embedding], dtype=np.float32)
         faiss.normalize_L2(query_vector)
@@ -48,15 +51,17 @@ class VectorStore:
 
         documents = []
         metadatas = []
-        for idx in indices[0]:
-            if idx < len(self._documents):
+        kept_distances = []
+        for idx, dist in zip(indices[0], distances[0]):
+            if 0 <= idx < len(self._documents):
                 documents.append(self._documents[idx])
                 metadatas.append(self._metadatas[idx])
+                kept_distances.append(float(dist))
 
         return {
             "documents": documents,
             "metadatas": metadatas,
-            "distances": distances[0].tolist(),
+            "distances": kept_distances,
         }
 
     def _save(self):

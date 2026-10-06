@@ -81,12 +81,12 @@ class RAGPipeline:
             "collection": collection_name or self.vector_store.collection_name,
         }
 
-    def query_metadata_only(
+    async def query_stream(
         self,
         question: str,
         top_k: int = 5,
         collection_name: Optional[str] = None,
-    ) -> dict:
+    ):
         start_time = time.time()
         results = self.vector_store.query(question, top_k=top_k)
         retrieval_time = time.time() - start_time
@@ -108,24 +108,19 @@ class RAGPipeline:
                 }
             )
 
-        return {
+        yield {
+            "type": "metadata",
             "sources": sources,
             "retrieval_latency_ms": round(retrieval_time * 1000, 2),
             "chunks_retrieved": len(context_chunks),
             "top_k": top_k,
         }
 
-    async def query_stream(
-        self,
-        question: str,
-        top_k: int = 5,
-        collection_name: Optional[str] = None,
-    ):
-        results = self.vector_store.query(question, top_k=top_k)
-        context_chunks = results["documents"]
-
         if not context_chunks:
-            yield "No documents have been uploaded yet. Please upload a document in the sidebar to begin asking questions."
+            yield {
+                "type": "token",
+                "content": "No documents have been uploaded yet. Please upload a document in the sidebar to begin asking questions.",
+            }
             return
 
         context_text = "\n\n---\n\n".join(context_chunks)
@@ -149,4 +144,5 @@ Answer:"""
             {"context": context_text, "question": question},
             config={"callbacks": [self.tracer]},
         ):
-            yield chunk
+            yield {"type": "token", "content": chunk}
+
