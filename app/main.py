@@ -121,22 +121,6 @@ async def ingest_files(
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-@app.post("/query")
-async def query_documents(request: QueryRequest):
-    try:
-        pipeline = RAGPipeline(
-            collection_name=request.collection_name or DEFAULT_COLLECTION
-        )
-        result = pipeline.query(
-            question=request.question,
-            top_k=request.top_k,
-            collection_name=request.collection_name,
-        )
-        return JSONResponse(content=result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.get("/collections")
 def list_collections():
     store = VectorStore()

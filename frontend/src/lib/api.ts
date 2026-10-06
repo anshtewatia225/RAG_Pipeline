@@ -1,6 +1,10 @@
-import type { IngestResponse, QueryResponse } from "./types";
+import type { IngestResponse, Source } from "./types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://rag-pipeline-ovwp.onrender.com";
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL ||
+  (typeof window !== "undefined" && window.location.hostname === "localhost"
+    ? "http://localhost:8000"
+    : "https://rag-pipeline-ovwp.onrender.com");
 
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -53,27 +57,14 @@ export async function ingest(
   });
 }
 
-export async function query(
-  question: string,
-  opts: { topK?: number; collectionName?: string } = {}
-): Promise<QueryResponse> {
-  return handle(
-    await fetch(`${API_URL}/query`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        question,
-        top_k: opts.topK ?? 5,
-        collection_name: opts.collectionName || null,
-      }),
-    })
-  );
-}
+export type QueryStreamEvent =
+  | { type: "metadata"; sources: Source[] }
+  | { type: "token"; content: string };
 
 export async function* queryStream(
   question: string,
   opts: { topK?: number; collectionName?: string } = {}
-): AsyncIterableIterator<string> {
+): AsyncGenerator<QueryStreamEvent> {
   const response = await fetch(`${API_URL}/query/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -85,17 +76,40 @@ export async function* queryStream(
   });
 
   if (!response.ok) {
-    throw new Error(response.statusText);
+    let detail = response.statusText;
+    try {
+      const body = await response.json();
+      detail = body.detail || detail;
+    } catch {}
+    throw new Error(detail);
   }
 
   const reader = response.body?.getReader();
-  if (!reader) return;
+  if (!reader) throw new Error("No reader available");
 
   const decoder = new TextDecoder();
+  let buffer = "";
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    yield decoder.decode(value, { stream: true });
+
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() || "";
+
+    for (const part of parts) {
+      if (!part.startsWith("data: ")) continue;
+      try {
+        const data = JSON.parse(part.substring(6));
+        if (data.type === "metadata") {
+          yield { type: "metadata", sources: data.sources || [] };
+        } else if (data.type === "token") {
+          yield { type: "token", content: data.content };
+        }
+      } catch (err) {
+        console.error("Failed to parse SSE line:", err);
+      }
+    }
   }
 }
 

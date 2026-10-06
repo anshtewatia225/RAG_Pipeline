@@ -5,6 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import type { Message, Source } from "@/lib/types";
+import { queryStream } from "@/lib/api";
 
 interface ChatProps {
   chatId: string;
@@ -12,8 +13,6 @@ interface ChatProps {
   initialMessages: Message[];
   onMessagesChange: (messages: Message[]) => void;
 }
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 const SUGGESTED_QUERIES = [
   "Summarize the uploaded document",
@@ -59,58 +58,23 @@ export function Chat({ chatId, collectionName, initialMessages, onMessagesChange
     setError(null);
 
     try {
-      const response = await fetch(`${API_URL}/query/stream`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          question: q,
-          top_k: 5,
-          collection_name: collectionName,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Server returned status ${response.status}`);
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error("No reader available");
-
-      const decoder = new TextDecoder();
-      let buffer = "";
       let accumulatedContent = "";
       let currentSources: Source[] = [];
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.substring(6));
-              if (data.type === "metadata") {
-                currentSources = data.sources || [];
-              } else if (data.type === "token") {
-                accumulatedContent += data.content;
-                updateMessages((prev) => {
-                  const copy = [...prev];
-                  copy[copy.length - 1] = {
-                    role: "assistant",
-                    content: accumulatedContent,
-                    sources: currentSources,
-                  };
-                  return copy;
-                });
-              }
-            } catch (err) {
-              console.error("Failed to parse SSE line:", err);
-            }
-          }
+      for await (const evt of queryStream(q, { topK: 5, collectionName })) {
+        if (evt.type === "metadata") {
+          currentSources = evt.sources;
+        } else if (evt.type === "token") {
+          accumulatedContent += evt.content;
+          updateMessages((prev) => {
+            const copy = [...prev];
+            copy[copy.length - 1] = {
+              role: "assistant",
+              content: accumulatedContent,
+              sources: currentSources,
+            };
+            return copy;
+          });
         }
       }
     } catch (e) {
