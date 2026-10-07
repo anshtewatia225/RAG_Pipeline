@@ -35,7 +35,7 @@ A full-stack **Retrieval-Augmented Generation (RAG)** application. Upload docume
 - Drag-and-drop upload with live progress and automatic ingestion.
 - Rich, **sanitized** Markdown answers (tables, code, lists) with numbered source citations.
 - **Page-aware citations** for PDFs (`[1] doc.pdf · p.3`).
-- **Server-side conversation memory** (SQLite): bounded history plus follow-up question condensation, persisted across reloads/devices.
+- **Server-side conversation memory** (SQLite): bounded history plus follow-up question condensation. The UI opens a clean conversation each load; history is retained server-side and available via the conversations API.
 - **Hybrid retrieval**: dense FAISS + BM25 fused with reciprocal rank fusion, MMR diversification, and a local Flashrank cross-encoder reranker.
 - **Reliability**: LLM response cache, an embedding cache, and automatic retries/timeouts on provider calls.
 - Per-response metrics (retrieval latency, chunk counts) and source references.

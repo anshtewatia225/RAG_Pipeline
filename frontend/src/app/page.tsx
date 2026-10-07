@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Chat } from "@/components/Chat";
 import { Sidebar } from "@/components/Sidebar";
-import { deleteCollection, deleteConversation, getConversation } from "@/lib/api";
+import { deleteCollection, deleteConversation } from "@/lib/api";
 import type { ChatSession, IngestedFile, Message } from "@/lib/types";
 
 const collectionFor = (chatId: string) => `chat_${chatId}`;
@@ -23,74 +23,17 @@ export default function Home() {
   const [activeChatId, setActiveChatId] = useState<string>("");
 
   useEffect(() => {
-    const saved = localStorage.getItem("rag_chats");
-    // Client-only hydration: the static export renders before localStorage exists,
-    // so this must run after mount rather than in a state initializer.
+    // Always open a clean, empty conversation on first load.
     /* eslint-disable react-hooks/set-state-in-effect */
-    if (saved) {
-      try {
-        const parsed: ChatSession[] = JSON.parse(saved);
-        if (parsed.length > 0) {
-          const normalized = parsed.map((chat) => ({
-            ...chat,
-            messages: (chat.messages || []).map((m) => ({
-              ...m,
-              id: m.id || crypto.randomUUID(),
-            })),
-          }));
-          setChats(normalized);
-          setActiveChatId(normalized[0].id);
-
-          void (async () => {
-            const seeded = await Promise.all(
-              normalized.map(async (chat) => {
-                if (chat.messages.length > 0) return chat;
-                try {
-                  const { messages } = await getConversation(chat.id);
-                  if (messages.length > 0) {
-                    return {
-                      ...chat,
-                      messages: messages.map((m) => ({
-                        id: crypto.randomUUID(),
-                        role: m.role,
-                        content: m.content,
-                        sources: m.sources || undefined,
-                      })),
-                    };
-                  }
-                } catch {
-                  // server memory unavailable; keep local cache
-                }
-                return chat;
-              })
-            );
-            setChats(seeded);
-          })();
-          return;
-        }
-      } catch (e) {
-        console.error("Failed to load chats:", e);
-      }
-    }
     const fresh = makeChat();
     setChats([fresh]);
     setActiveChatId(fresh.id);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
-  useEffect(() => {
-    if (chats.length > 0) {
-      localStorage.setItem("rag_chats", JSON.stringify(chats));
-    }
-  }, [chats]);
-
   const createNewChat = () => {
     const newChat = makeChat();
-    setChats((prev) => {
-      const updated = [newChat, ...prev];
-      localStorage.setItem("rag_chats", JSON.stringify(updated));
-      return updated;
-    });
+    setChats((prev) => [newChat, ...prev]);
     setActiveChatId(newChat.id);
   };
 
@@ -108,13 +51,11 @@ export default function Home() {
       if (updated.length === 0) {
         const fresh = makeChat();
         setActiveChatId(fresh.id);
-        localStorage.setItem("rag_chats", JSON.stringify([fresh]));
         return [fresh];
       }
       if (activeChatId === id) {
         setActiveChatId(updated[0].id);
       }
-      localStorage.setItem("rag_chats", JSON.stringify(updated));
       return updated;
     });
   };

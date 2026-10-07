@@ -174,8 +174,8 @@ cannot, and cite bracketed block numbers matching the source list in the UI.
 ## 9. Frontend
 
 - `src/app/page.tsx` — chat sessions + per-chat collection names
-  (`chat_<uuid>`); deleting a conversation deletes its collection and server
-  conversation; on load it seeds empty local chats from the server.
+  (`chat_<uuid>`); every load starts a fresh conversation (no local restore);
+  deleting a conversation deletes its collection and server conversation.
 - `src/components/Chat.tsx` — SSE consumption with `AbortController`, stable
   message ids, sanitized Markdown (`rehype-sanitize`), source rendering with
   page numbers, and `conversationId` propagation for memory.
