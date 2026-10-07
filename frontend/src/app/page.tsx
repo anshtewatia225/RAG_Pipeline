@@ -3,7 +3,20 @@
 import { useEffect, useState } from "react";
 import { Chat } from "@/components/Chat";
 import { Sidebar } from "@/components/Sidebar";
+import { deleteCollection, deleteConversation, getConversation } from "@/lib/api";
 import type { ChatSession, IngestedFile, Message } from "@/lib/types";
+
+const collectionFor = (chatId: string) => `chat_${chatId}`;
+
+function makeChat(): ChatSession {
+  return {
+    id: crypto.randomUUID(),
+    title: "New Conversation",
+    messages: [],
+    files: [],
+    createdAt: Date.now(),
+  };
+}
 
 export default function Home() {
   const [chats, setChats] = useState<ChatSession[]>([]);
@@ -11,19 +24,58 @@ export default function Home() {
 
   useEffect(() => {
     const saved = localStorage.getItem("rag_chats");
+    // Client-only hydration: the static export renders before localStorage exists,
+    // so this must run after mount rather than in a state initializer.
+    /* eslint-disable react-hooks/set-state-in-effect */
     if (saved) {
       try {
         const parsed: ChatSession[] = JSON.parse(saved);
         if (parsed.length > 0) {
-          setChats(parsed);
-          setActiveChatId(parsed[0].id);
+          const normalized = parsed.map((chat) => ({
+            ...chat,
+            messages: (chat.messages || []).map((m) => ({
+              ...m,
+              id: m.id || crypto.randomUUID(),
+            })),
+          }));
+          setChats(normalized);
+          setActiveChatId(normalized[0].id);
+
+          void (async () => {
+            const seeded = await Promise.all(
+              normalized.map(async (chat) => {
+                if (chat.messages.length > 0) return chat;
+                try {
+                  const { messages } = await getConversation(chat.id);
+                  if (messages.length > 0) {
+                    return {
+                      ...chat,
+                      messages: messages.map((m) => ({
+                        id: crypto.randomUUID(),
+                        role: m.role,
+                        content: m.content,
+                        sources: m.sources || undefined,
+                      })),
+                    };
+                  }
+                } catch {
+                  // server memory unavailable; keep local cache
+                }
+                return chat;
+              })
+            );
+            setChats(seeded);
+          })();
           return;
         }
       } catch (e) {
         console.error("Failed to load chats:", e);
       }
     }
-    createNewChat([]);
+    const fresh = makeChat();
+    setChats([fresh]);
+    setActiveChatId(fresh.id);
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
   useEffect(() => {
@@ -32,40 +84,39 @@ export default function Home() {
     }
   }, [chats]);
 
-  const createNewChat = (existingChats: ChatSession[] = chats) => {
-    const newChat: ChatSession = {
-      id: Date.now().toString(),
-      title: "New Conversation",
-      messages: [],
-      files: [],
-      createdAt: Date.now(),
-    };
-    const updated = [newChat, ...existingChats];
-    setChats(updated);
+  const createNewChat = () => {
+    const newChat = makeChat();
+    setChats((prev) => {
+      const updated = [newChat, ...prev];
+      localStorage.setItem("rag_chats", JSON.stringify(updated));
+      return updated;
+    });
     setActiveChatId(newChat.id);
-    localStorage.setItem("rag_chats", JSON.stringify(updated));
   };
 
   const deleteChat = (id: string) => {
-    const updated = chats.filter((c) => c.id !== id);
-    if (updated.length === 0) {
-      const fresh: ChatSession = {
-        id: Date.now().toString(),
-        title: "New Conversation",
-        messages: [],
-        files: [],
-        createdAt: Date.now(),
-      };
-      setChats([fresh]);
-      setActiveChatId(fresh.id);
-      localStorage.setItem("rag_chats", JSON.stringify([fresh]));
-    } else {
-      setChats(updated);
+    const collection = collectionFor(id);
+    void deleteCollection(collection).catch((e) =>
+      console.error(`Failed to delete collection ${collection}:`, e)
+    );
+    void deleteConversation(id).catch((e) =>
+      console.error(`Failed to delete conversation ${id}:`, e)
+    );
+
+    setChats((prev) => {
+      const updated = prev.filter((c) => c.id !== id);
+      if (updated.length === 0) {
+        const fresh = makeChat();
+        setActiveChatId(fresh.id);
+        localStorage.setItem("rag_chats", JSON.stringify([fresh]));
+        return [fresh];
+      }
       if (activeChatId === id) {
         setActiveChatId(updated[0].id);
       }
       localStorage.setItem("rag_chats", JSON.stringify(updated));
-    }
+      return updated;
+    });
   };
 
   const updateActiveMessages = (messages: Message[]) => {
@@ -76,7 +127,9 @@ export default function Home() {
           if (title === "New Conversation" && messages.length > 0) {
             const firstUserMsg = messages.find((m) => m.role === "user");
             if (firstUserMsg) {
-              title = firstUserMsg.content.slice(0, 30) + (firstUserMsg.content.length > 30 ? "..." : "");
+              title =
+                firstUserMsg.content.slice(0, 30) +
+                (firstUserMsg.content.length > 30 ? "..." : "");
             }
           }
           return { ...chat, messages, title };
@@ -93,7 +146,7 @@ export default function Home() {
   };
 
   const activeChat = chats.find((c) => c.id === activeChatId) || chats[0];
-  const collectionName = activeChat ? `chat_${activeChat.id}` : "rag_documents";
+  const collectionName = activeChat ? collectionFor(activeChat.id) : "rag_documents";
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-[var(--bg-base)]">
@@ -134,7 +187,7 @@ export default function Home() {
           chats={chats}
           activeChatId={activeChatId}
           onSelectChat={setActiveChatId}
-          onNewChat={() => createNewChat()}
+          onNewChat={createNewChat}
           onDeleteChat={deleteChat}
           files={activeChat ? activeChat.files : []}
           onFilesChange={updateActiveFiles}
@@ -145,8 +198,8 @@ export default function Home() {
             {activeChat && (
               <Chat
                 key={activeChat.id}
-                chatId={activeChat.id}
                 collectionName={collectionName}
+                conversationId={activeChat.id}
                 initialMessages={activeChat.messages}
                 onMessagesChange={updateActiveMessages}
               />

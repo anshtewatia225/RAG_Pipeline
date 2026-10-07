@@ -1,124 +1,228 @@
-import os
 import json
+import logging
 import shutil
-import faiss
-import numpy as np
-from app.config import get_embeddings, FAISS_INDEX_DIR
+import threading
+from pathlib import Path
+
+from langchain_community.vectorstores import FAISS
+from langchain_community.vectorstores.utils import DistanceStrategy
+from langchain_core.documents import Document
+
+from app.config import FAISS_INDEX_DIR, get_embeddings
+from app.utils import collection_dir, validate_collection_name
+
+logger = logging.getLogger(__name__)
+
+_MANIFEST_NAME = "manifest.json"
+_INDEX_NAME = "index"
 
 
 class VectorStore:
-    def __init__(self, collection_name: str = "rag_documents"):
-        self.collection_name = collection_name
-        self._embedding_fn = get_embeddings()
-        self._index_dir = os.path.join(FAISS_INDEX_DIR, collection_name)
-        self._index_path = os.path.join(self._index_dir, "index.faiss")
-        self._meta_path = os.path.join(self._index_dir, "metadata.json")
-        self._documents: list[str] = []
-        self._metadatas: list[dict] = []
-        self._index: faiss.IndexFlatIP | None = None
-        self._load_or_create()
+    """Thin, thread-safe wrapper around LangChain's FAISS vector store.
 
-    def _load_or_create(self):
-        os.makedirs(self._index_dir, exist_ok=True)
-        if os.path.exists(self._index_path):
-            self._index = faiss.read_index(self._index_path)
-            with open(self._meta_path, "r") as f:
-                data = json.load(f)
-                self._documents = data["documents"]
-                self._metadatas = data["metadatas"]
-        else:
-            self._index = faiss.IndexFlatIP(3072)
+    One instance is cached per collection so concurrent requests share the
+    loaded index instead of reloading (and racing) from disk.
+    """
 
-    def add_documents(self, ids: list[str], documents: list[str], metadatas: list[dict]):
-        embeddings = self._embedding_fn.embed_documents(documents)
-        vectors = np.array(embeddings, dtype=np.float32)
-        faiss.normalize_L2(vectors)
-        self._index.add(vectors)
-        self._documents.extend(documents)
-        self._metadatas.extend(metadatas)
-        self._save()
+    def __init__(self, collection_name: str):
+        self.collection_name = validate_collection_name(collection_name)
+        self._dir = collection_dir(self.collection_name)
+        self._embeddings = get_embeddings()
+        self._store: FAISS | None = None
+        self._manifest: dict[str, dict] = {}
+        self._lock = threading.RLock()
+        self._load()
 
+    # ------------------------------------------------------------------ load
+    def _load(self) -> None:
+        self._dir.mkdir(parents=True, exist_ok=True)
+        if (self._dir / f"{_INDEX_NAME}.pkl").exists():
+            self._store = FAISS.load_local(
+                str(self._dir),
+                self._embeddings,
+                allow_dangerous_deserialization=True,
+            )
+        manifest_path = self._dir / _MANIFEST_NAME
+        if manifest_path.exists():
+            try:
+                self._manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                logger.warning("Corrupt manifest for collection %s", self.collection_name)
+
+    def _save(self) -> None:
+        if self._store is None:
+            return
+        self._store.save_local(str(self._dir), index_name=_INDEX_NAME)
+        (self._dir / _MANIFEST_NAME).write_text(
+            json.dumps(self._manifest), encoding="utf-8"
+        )
+
+    # ----------------------------------------------------------------- write
+    def add_documents(
+        self,
+        documents: list[Document],
+        ids: list[str],
+        file_name: str | None = None,
+        sha256: str | None = None,
+    ) -> list[str]:
+        if not documents:
+            return []
+        with self._lock:
+            if self._store is None:
+                self._store = FAISS.from_documents(
+                    documents,
+                    self._embeddings,
+                    ids=ids,
+                    distance_strategy=DistanceStrategy.MAX_INNER_PRODUCT,
+                )
+            else:
+                self._store.add_documents(documents, ids=ids)
+
+            if file_name is not None:
+                self._manifest[file_name] = {"sha256": sha256, "ids": ids}
+            self._save()
+        return ids
+
+    def find_duplicate_files(self, sha256: str) -> list[str]:
+        with self._lock:
+            return [
+                name
+                for name, entry in self._manifest.items()
+                if entry.get("sha256") == sha256
+            ]
+
+    def get_file(self, file_name: str) -> dict | None:
+        with self._lock:
+            entry = self._manifest.get(file_name)
+            return dict(entry) if entry else None
+
+    # ------------------------------------------------------------------ read
     def query(self, query_text: str, top_k: int = 5) -> dict:
-        if self._index.ntotal == 0:
-            return {"documents": [], "metadatas": [], "distances": []}
+        with self._lock:
+            if self._store is None or self._store.index.ntotal == 0:
+                return {"documents": [], "metadatas": [], "distances": []}
 
-        query_embedding = self._embedding_fn.embed_query(query_text)
-        query_vector = np.array([query_embedding], dtype=np.float32)
-        faiss.normalize_L2(query_vector)
+            k = min(top_k, self._store.index.ntotal)
+            results = self._store.similarity_search_with_score(query_text, k=k)
 
-        k = min(top_k, self._index.ntotal)
-        distances, indices = self._index.search(query_vector, k)
-
-        documents = []
-        metadatas = []
-        kept_distances = []
-        for idx, dist in zip(indices[0], distances[0]):
-            if 0 <= idx < len(self._documents):
-                documents.append(self._documents[idx])
-                metadatas.append(self._metadatas[idx])
-                kept_distances.append(float(dist))
-
+        documents: list[str] = []
+        metadatas: list[dict] = []
+        distances: list[float] = []
+        for doc, score in results:
+            documents.append(doc.page_content)
+            metadatas.append(doc.metadata)
+            distances.append(float(score))
         return {
             "documents": documents,
             "metadatas": metadatas,
-            "distances": kept_distances,
+            "distances": distances,
         }
 
-    def _save(self):
-        faiss.write_index(self._index, self._index_path)
-        with open(self._meta_path, "w") as f:
-            json.dump({"documents": self._documents, "metadatas": self._metadatas}, f)
+    def similarity_search_with_score(
+        self, query_text: str, k: int = 5
+    ) -> list[tuple[Document, float]]:
+        with self._lock:
+            if self._store is None or self._store.index.ntotal == 0:
+                return []
+            k = min(k, self._store.index.ntotal)
+            return self._store.similarity_search_with_score(query_text, k=k)
 
-    def clear(self):
-        self._documents = []
-        self._metadatas = []
-        self._index = faiss.IndexFlatIP(3072)
-        if os.path.exists(self._index_dir):
-            shutil.rmtree(self._index_dir)
-        os.makedirs(self._index_dir, exist_ok=True)
-        self._save()
+    def max_marginal_relevance_search(
+        self, query_text: str, k: int = 5, fetch_k: int = 20, lambda_mult: float = 0.5
+    ) -> list[Document]:
+        with self._lock:
+            if self._store is None or self._store.index.ntotal == 0:
+                return []
+            k = min(k, self._store.index.ntotal)
+            return self._store.max_marginal_relevance_search(
+                query_text, k=k, fetch_k=fetch_k, lambda_mult=lambda_mult
+            )
 
+    def all_documents(self) -> list[Document]:
+        with self._lock:
+            if self._store is None:
+                return []
+            docstore = getattr(self._store, "docstore", None)
+            if docstore is None:
+                return []
+            store_dict = getattr(docstore, "_dict", None)
+            if isinstance(store_dict, dict):
+                return list(store_dict.values())
+            return list(getattr(docstore, "yield_keys", lambda: [])())
+
+    def revision(self) -> int:
+        with self._lock:
+            return self._store.index.ntotal if self._store is not None else 0
+
+    def as_retriever(self, top_k: int = 5):
+        with self._lock:
+            if self._store is None:
+                return None
+            return self._store.as_retriever(search_kwargs={"k": top_k})
+
+    # ---------------------------------------------------------------- delete
     def delete_document(self, file_name: str) -> dict:
-        filtered_docs = []
-        filtered_metas = []
-        for doc, meta in zip(self._documents, self._metadatas):
-            if meta.get("file_name") != file_name and meta.get("source") != file_name:
-                filtered_docs.append(doc)
-                filtered_metas.append(meta)
+        with self._lock:
+            entry = self._manifest.get(file_name)
+            ids = list(entry.get("ids", [])) if entry else []
+            if ids and self._store is not None:
+                self._store.delete(ids)
+            self._manifest.pop(file_name, None)
 
-        if len(filtered_docs) == 0:
-            self.clear()
-            return {"remaining_chunks": 0}
+            if self._store is None or self._store.index.ntotal == 0:
+                self.clear()
+                return {"remaining_chunks": 0}
 
-        embeddings = self._embedding_fn.embed_documents(filtered_docs)
-        vectors = np.array(embeddings, dtype=np.float32)
-        faiss.normalize_L2(vectors)
-        new_index = faiss.IndexFlatIP(3072)
-        new_index.add(vectors)
+            self._save()
+            return {"remaining_chunks": self._store.index.ntotal}
 
-        self._index = new_index
-        self._documents = filtered_docs
-        self._metadatas = filtered_metas
-        self._save()
-        return {"remaining_chunks": len(self._documents)}
+    def clear(self) -> None:
+        with self._lock:
+            if self._dir.exists():
+                shutil.rmtree(self._dir, ignore_errors=True)
+            self._dir.mkdir(parents=True, exist_ok=True)
+            self._store = None
+            self._manifest = {}
 
     def get_collection_stats(self) -> dict:
-        return {"collection": self.collection_name, "total_chunks": self._index.ntotal}
+        with self._lock:
+            total = self._store.index.ntotal if self._store is not None else 0
+            return {
+                "collection": self.collection_name,
+                "total_chunks": total,
+                "file_count": len(self._manifest),
+            }
 
-    def list_collections(self) -> list[str]:
-        if not os.path.exists(FAISS_INDEX_DIR):
-            return []
-        return [
-            d for d in os.listdir(FAISS_INDEX_DIR)
-            if os.path.isdir(os.path.join(FAISS_INDEX_DIR, d))
-        ]
 
-    def delete_collection(self, name: str = None):
-        target = name or self.collection_name
-        path = os.path.join(FAISS_INDEX_DIR, target)
-        if os.path.exists(path):
-            shutil.rmtree(path)
-        if target == self.collection_name:
-            self._documents = []
-            self._metadatas = []
-            self._index = faiss.IndexFlatIP(3072)
+# ---------------------------------------------------------------- registry
+_STORES: dict[str, VectorStore] = {}
+_STORES_LOCK = threading.Lock()
+
+
+def get_vector_store(collection_name: str) -> VectorStore:
+    name = validate_collection_name(collection_name)
+    with _STORES_LOCK:
+        store = _STORES.get(name)
+        if store is None:
+            store = VectorStore(name)
+            _STORES[name] = store
+        return store
+
+
+def list_collections() -> list[str]:
+    if not FAISS_INDEX_DIR.exists():
+        return []
+    return sorted(
+        d.name
+        for d in FAISS_INDEX_DIR.iterdir()
+        if d.is_dir() and (d / f"{_INDEX_NAME}.faiss").exists()
+    )
+
+
+def delete_collection(name: str) -> None:
+    name = validate_collection_name(name)
+    target = collection_dir(name)
+    with _STORES_LOCK:
+        _STORES.pop(name, None)
+    if target.exists():
+        shutil.rmtree(target, ignore_errors=True)

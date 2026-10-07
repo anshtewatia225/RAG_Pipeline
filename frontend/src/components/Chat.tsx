@@ -1,15 +1,15 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import rehypeRaw from "rehype-raw";
+import rehypeSanitize from "rehype-sanitize";
 import type { Message, Source } from "@/lib/types";
 import { queryStream } from "@/lib/api";
 
 interface ChatProps {
-  chatId: string;
   collectionName: string;
+  conversationId: string;
   initialMessages: Message[];
   onMessagesChange: (messages: Message[]) => void;
 }
@@ -21,7 +21,7 @@ const SUGGESTED_QUERIES = [
   "List key functions and endpoints",
 ];
 
-export function Chat({ chatId, collectionName, initialMessages, onMessagesChange }: ChatProps) {
+export function Chat({ collectionName, conversationId, initialMessages, onMessagesChange }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>(initialMessages || []);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -29,20 +29,23 @@ export function Chat({ chatId, collectionName, initialMessages, onMessagesChange
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    onMessagesChange(messages);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages]);
+
+  useEffect(() => {
+    return () => abortRef.current?.abort();
+  }, []);
 
   const updateMessages = (newMessages: Message[] | ((prev: Message[]) => Message[])) => {
-    setMessages((prev) => {
-      const updated = typeof newMessages === "function" ? newMessages(prev) : newMessages;
-      // Schedule parent update in next microtask / tick to prevent render-phase updates
-      setTimeout(() => {
-        onMessagesChange(updated);
-      }, 0);
-      return updated;
-    });
+    setMessages((prev) => (typeof newMessages === "function" ? newMessages(prev) : newMessages));
   };
 
   const copyMessage = (text: string, index: number) => {
-    navigator.clipboard.writeText(text);
+    void navigator.clipboard.writeText(text);
     setCopiedIndex(index);
     setTimeout(() => setCopiedIndex(null), 2000);
   };
@@ -51,36 +54,56 @@ export function Chat({ chatId, collectionName, initialMessages, onMessagesChange
     const q = queryText.trim();
     if (!q || loading) return;
 
-    const nextMessages = [...messages, { role: "user" as const, content: q }, { role: "assistant" as const, content: "" }];
+    const nextMessages: Message[] = [
+      ...messages,
+      { id: crypto.randomUUID(), role: "user", content: q },
+      { id: crypto.randomUUID(), role: "assistant", content: "" },
+    ];
     updateMessages(nextMessages);
     setInput("");
     setLoading(true);
     setError(null);
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
       let accumulatedContent = "";
       let currentSources: Source[] = [];
 
-      for await (const evt of queryStream(q, { topK: 5, collectionName })) {
+      for await (const evt of queryStream(q, {
+        topK: 5,
+        collectionName,
+        conversationId,
+        signal: controller.signal,
+      })) {
         if (evt.type === "metadata") {
           currentSources = evt.sources;
         } else if (evt.type === "token") {
           accumulatedContent += evt.content;
           updateMessages((prev) => {
             const copy = [...prev];
-            copy[copy.length - 1] = {
-              role: "assistant",
-              content: accumulatedContent,
-              sources: currentSources,
-            };
+            const last = copy[copy.length - 1];
+            if (last?.role === "assistant") {
+              copy[copy.length - 1] = {
+                ...last,
+                content: accumulatedContent,
+                sources: currentSources,
+              };
+            }
             return copy;
           });
+        } else if (evt.type === "error") {
+          setError(evt.message);
+          updateMessages((prev) => prev.slice(0, -1));
         }
       }
     } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
       setError(e instanceof Error ? e.message : "Query failed");
       updateMessages((prev) => prev.slice(0, -1));
     } finally {
+      if (abortRef.current === controller) abortRef.current = null;
       setLoading(false);
     }
   };
@@ -116,9 +139,9 @@ export function Chat({ chatId, collectionName, initialMessages, onMessagesChange
 
             {/* 2x2 Grid of Suggested Queries */}
             <div className="grid grid-cols-2 gap-3.5 w-full max-w-xl mt-4">
-              {SUGGESTED_QUERIES.map((query, idx) => (
+              {SUGGESTED_QUERIES.map((query) => (
                 <button
-                  key={idx}
+                  key={query}
                   onClick={() => triggerSend(query)}
                   className="text-left p-4 rounded-xl glass-panel hover:border-[var(--accent-1)] hover:bg-[rgba(99,102,241,0.08)] transition-all flex items-center justify-between group"
                   style={{ background: "rgba(255, 255, 255, 0.02)" }}
@@ -137,7 +160,7 @@ export function Chat({ chatId, collectionName, initialMessages, onMessagesChange
 
         {messages.map((m, i) => (
           <div
-            key={i}
+            key={m.id}
             className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
           >
             <div className={`max-w-[85%] ${m.role === "user" ? "msg-user" : "msg-assistant"}`}>
@@ -149,7 +172,7 @@ export function Chat({ chatId, collectionName, initialMessages, onMessagesChange
                 <div className="prose text-sm max-w-none">
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
-                    rehypePlugins={[rehypeRaw]}
+                    rehypePlugins={[rehypeSanitize]}
                   >
                     {m.content}
                   </ReactMarkdown>
@@ -163,6 +186,16 @@ export function Chat({ chatId, collectionName, initialMessages, onMessagesChange
                 </div>
               )}
 
+              {m.role === "assistant" && m.content && (
+                <button
+                  onClick={() => copyMessage(m.content, i)}
+                  aria-label="Copy answer"
+                  className="mt-2 text-[10px] text-[var(--text-tertiary)] hover:text-white transition-colors"
+                >
+                  {copiedIndex === i ? "Copied" : "Copy"}
+                </button>
+              )}
+
               {/* Sources */}
               {m.sources && m.sources.length > 0 && (
                 <details className="mt-4 pt-3 border-t border-[var(--border-default)]">
@@ -173,9 +206,12 @@ export function Chat({ chatId, collectionName, initialMessages, onMessagesChange
                     {m.sources.length} Source{m.sources.length !== 1 ? "s" : ""} Retrieved
                   </summary>
                   <div className="mt-2.5 space-y-2">
-                    {m.sources.map((s, j) => (
-                      <div key={j} className="p-2.5 rounded-lg bg-black/20 border border-[var(--border-subtle)] text-xs">
-                        <span className="font-semibold text-[var(--accent-1)]">{s.source}</span>
+                    {m.sources.map((s) => (
+                      <div key={`${m.id}-${s.chunk_index}`} className="p-2.5 rounded-lg bg-black/20 border border-[var(--border-subtle)] text-xs">
+                        <span className="font-semibold text-[var(--accent-1)]">
+                          [{s.chunk_index}] {s.source}
+                          {s.page != null ? ` \u00b7 p.${s.page + 1}` : ""}
+                        </span>
                         <p className="text-[var(--text-secondary)] mt-1 leading-relaxed">{s.text}</p>
                       </div>
                     ))}
@@ -203,6 +239,7 @@ export function Chat({ chatId, collectionName, initialMessages, onMessagesChange
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && triggerSend(input)}
             placeholder="Ask a question about your documents..."
+            aria-label="Question"
             className="flex-1 glass-input text-sm"
             disabled={loading}
           />

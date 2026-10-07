@@ -1,10 +1,6 @@
-import type { IngestResponse, Source } from "./types";
+import type { ConversationMessage, IngestResponse, Source } from "./types";
 
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ||
-  (typeof window !== "undefined" && window.location.hostname === "localhost"
-    ? "http://localhost:8000"
-    : "https://rag-pipeline-ovwp.onrender.com");
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 async function handle<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -13,7 +9,7 @@ async function handle<T>(res: Response): Promise<T> {
       const body = await res.json();
       detail = body.detail || detail;
     } catch {}
-    throw new Error(detail);
+    throw new Error(typeof detail === "string" ? detail : "Request failed");
   }
   return res.json();
 }
@@ -43,7 +39,11 @@ export async function ingest(
     };
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
-        resolve(JSON.parse(xhr.responseText));
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch {
+          reject(new Error("Malformed server response"));
+        }
       } else {
         try {
           reject(new Error(JSON.parse(xhr.responseText).detail));
@@ -59,11 +59,26 @@ export async function ingest(
 
 export type QueryStreamEvent =
   | { type: "metadata"; sources: Source[] }
-  | { type: "token"; content: string };
+  | { type: "token"; content: string }
+  | { type: "error"; message: string };
+
+function isSource(value: unknown): value is Source {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Source).source === "string" &&
+    typeof (value as Source).text === "string"
+  );
+}
 
 export async function* queryStream(
   question: string,
-  opts: { topK?: number; collectionName?: string } = {}
+  opts: {
+    topK?: number;
+    collectionName?: string;
+    conversationId?: string;
+    signal?: AbortSignal;
+  } = {}
 ): AsyncGenerator<QueryStreamEvent> {
   const response = await fetch(`${API_URL}/query/stream`, {
     method: "POST",
@@ -72,7 +87,9 @@ export async function* queryStream(
       question,
       top_k: opts.topK ?? 5,
       collection_name: opts.collectionName || null,
+      conversation_id: opts.conversationId || null,
     }),
+    signal: opts.signal,
   });
 
   if (!response.ok) {
@@ -89,39 +106,51 @@ export async function* queryStream(
 
   const decoder = new TextDecoder();
   let buffer = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop() || "";
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() || "";
 
-    for (const part of parts) {
-      if (!part.startsWith("data: ")) continue;
-      try {
-        const data = JSON.parse(part.substring(6));
-        if (data.type === "metadata") {
-          yield { type: "metadata", sources: data.sources || [] };
-        } else if (data.type === "token") {
-          yield { type: "token", content: data.content };
+      for (const part of parts) {
+        if (!part.startsWith("data: ")) continue;
+        try {
+          const data = JSON.parse(part.substring(6));
+          if (data.type === "metadata") {
+            const sources = Array.isArray(data.sources)
+              ? data.sources.filter(isSource)
+              : [];
+            yield { type: "metadata", sources };
+          } else if (data.type === "token") {
+            yield { type: "token", content: String(data.content ?? "") };
+          } else if (data.type === "error") {
+            yield { type: "error", message: String(data.message ?? "Query failed") };
+          }
+        } catch (err) {
+          console.error("Failed to parse SSE line:", err);
         }
-      } catch (err) {
-        console.error("Failed to parse SSE line:", err);
       }
     }
+  } finally {
+    reader.releaseLock();
   }
 }
 
-export async function clearAll(collectionName: string = "rag_documents"): Promise<{ status: string }> {
-  try {
-    const res = await fetch(`${API_URL}/clear${collectionName ? `?collection_name=${encodeURIComponent(collectionName)}` : ""}`, {
-      method: "POST",
-    });
-    if (res.ok) return res.json();
-  } catch {}
+export async function clearAll(
+  collectionName: string = "rag_documents"
+): Promise<{ status: string }> {
+  const query = collectionName
+    ? `?collection_name=${encodeURIComponent(collectionName)}`
+    : "";
+  return handle(await fetch(`${API_URL}/clear${query}`, { method: "POST" }));
+}
 
-  // Fallback to existing DELETE /collections/{name} endpoint
+export async function deleteCollection(
+  collectionName: string
+): Promise<{ status: string; collection: string }> {
   return handle(
     await fetch(`${API_URL}/collections/${encodeURIComponent(collectionName)}`, {
       method: "DELETE",
@@ -129,11 +158,32 @@ export async function clearAll(collectionName: string = "rag_documents"): Promis
   );
 }
 
-export async function deleteDocument(fileName: string, collectionName?: string): Promise<{ status: string }> {
+export async function deleteDocument(
+  fileName: string,
+  collectionName?: string
+): Promise<{ status: string }> {
   return handle(
     await fetch(
       `${API_URL}/documents/${encodeURIComponent(fileName)}${collectionName ? `?collection_name=${encodeURIComponent(collectionName)}` : ""}`,
       { method: "DELETE" }
     )
+  );
+}
+
+export async function getConversation(
+  conversationId: string
+): Promise<{ conversation_id: string; messages: ConversationMessage[] }> {
+  return handle(
+    await fetch(`${API_URL}/conversations/${encodeURIComponent(conversationId)}`)
+  );
+}
+
+export async function deleteConversation(
+  conversationId: string
+): Promise<{ status: string }> {
+  return handle(
+    await fetch(`${API_URL}/conversations/${encodeURIComponent(conversationId)}`, {
+      method: "DELETE",
+    })
   );
 }

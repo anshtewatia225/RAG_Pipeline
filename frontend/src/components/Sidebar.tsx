@@ -27,13 +27,24 @@ export function Sidebar({
 }: SidebarProps) {
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const filesRef = useRef<IngestedFile[]>(files);
 
-  const safeFiles = files || [];
+  useEffect(() => {
+    filesRef.current = files;
+  }, [files]);
+
+  const commitFiles = useCallback(
+    (next: IngestedFile[]) => {
+      filesRef.current = next;
+      onFilesChange(next);
+    },
+    [onFilesChange]
+  );
 
   const handleClearAll = async () => {
     try {
       await clearAll(collectionName);
-      onFilesChange([]);
+      commitFiles([]);
     } catch (e) {
       console.error("Failed to clear documents:", e);
     }
@@ -41,11 +52,12 @@ export function Sidebar({
 
   const processFiles = useCallback(
     async (incoming: FileList | File[]) => {
-      const arr = Array.from(incoming).filter(
-        (f) => f.name.match(/\.(pdf|txt|md|py)$/i)
+      const arr = Array.from(incoming).filter((f) =>
+        f.name.match(/\.(pdf|txt|md|py)$/i)
       );
       if (!arr.length) return;
 
+      const names = new Set(arr.map((f) => f.name));
       const newEntries: IngestedFile[] = arr.map((f) => ({
         name: f.name,
         chunks: 0,
@@ -54,54 +66,50 @@ export function Sidebar({
         progress: 0,
       }));
 
-      const updatedFiles = [
-        ...safeFiles.filter((f) => !arr.some((a) => a.name === f.name)),
+      commitFiles([
+        ...filesRef.current.filter((f) => !names.has(f.name)),
         ...newEntries,
-      ];
-      onFilesChange(updatedFiles);
+      ]);
 
       try {
-        const res = await ingest(
-          arr,
-          { collectionName },
-          (pct) => {
-            onFilesChange(
-              safeFiles.map((f) =>
-                arr.some((a) => a.name === f.name) ? { ...f, progress: pct } : f
-              )
-            );
-          }
-        );
+        const res = await ingest(arr, { collectionName }, (pct) => {
+          commitFiles(
+            filesRef.current.map((f) =>
+              names.has(f.name) ? { ...f, progress: pct } : f
+            )
+          );
+        });
 
-        const finalized = updatedFiles.map((f) =>
-          arr.some((a) => a.name === f.name)
-            ? {
-                ...f,
-                status: "done" as const,
-                chunks: Math.round(res.total_chunks / res.files_ingested.length),
-                collection: res.collection,
-                progress: 100,
-              }
-            : f
+        const chunkMap = new Map(res.files.map((f) => [f.name, f.chunks]));
+        commitFiles(
+          filesRef.current.map((f) =>
+            names.has(f.name)
+              ? {
+                  ...f,
+                  status: "done" as const,
+                  chunks: chunkMap.get(f.name) ?? 0,
+                  collection: res.collection,
+                  progress: 100,
+                }
+              : f
+          )
         );
-        onFilesChange(finalized);
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Failed";
-        onFilesChange(
-          safeFiles.map((f) =>
-            arr.some((a) => a.name === f.name)
+        commitFiles(
+          filesRef.current.map((f) =>
+            names.has(f.name)
               ? { ...f, status: "error" as const, error: msg }
               : f
           )
         );
       }
     },
-    [safeFiles, collectionName, onFilesChange]
+    [collectionName, commitFiles]
   );
 
   const removeFile = async (name: string) => {
-    const updated = safeFiles.filter((f) => f.name !== name);
-    onFilesChange(updated);
+    commitFiles(filesRef.current.filter((f) => f.name !== name));
     try {
       await deleteDocument(name, collectionName);
     } catch (e) {
@@ -109,10 +117,7 @@ export function Sidebar({
     }
   };
 
-  const doneCount = safeFiles.filter((f) => f.status === "done").length;
-  const totalChunks = safeFiles
-    .filter((f) => f.status === "done")
-    .reduce((sum, f) => sum + f.chunks, 0);
+  const doneCount = files.filter((f) => f.status === "done").length;
 
   return (
     <aside className="w-80 glass-panel shrink-0 flex flex-col h-full border-r border-[var(--border-default)] rounded-none">
@@ -156,6 +161,7 @@ export function Sidebar({
                     }}
                     className="opacity-0 group-hover:opacity-100 p-1 text-[var(--text-tertiary)] hover:text-red-400 transition-opacity"
                     title="Delete chat"
+                    aria-label={`Delete conversation ${chat.title}`}
                   >
                     <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -176,7 +182,7 @@ export function Sidebar({
           </svg>
           <span className="text-xs font-semibold text-white">Linked Docs ({doneCount})</span>
         </div>
-        {safeFiles.length > 0 && (
+        {files.length > 0 && (
           <button
             onClick={handleClearAll}
             className="text-[11px] text-[var(--text-tertiary)] hover:text-red-400 transition-colors"
@@ -189,6 +195,15 @@ export function Sidebar({
       {/* Drop Zone */}
       <div className="p-4">
         <div
+          role="button"
+          tabIndex={0}
+          aria-label="Upload documents"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              inputRef.current?.click();
+            }
+          }}
           onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
           onDragLeave={() => setDragging(false)}
           onDrop={(e) => {
@@ -197,7 +212,7 @@ export function Sidebar({
             processFiles(e.dataTransfer.files);
           }}
           onClick={() => inputRef.current?.click()}
-          className={`border border-dashed rounded-xl p-3 text-center cursor-pointer transition-all ${
+          className={`border border-dashed rounded-xl p-3 text-center cursor-pointer transition-all focus:outline-none focus:border-[var(--accent-1)] ${
             dragging
               ? "border-[var(--accent-1)] bg-[rgba(99,102,241,0.1)]"
               : "border-[var(--border-default)] bg-black/20 hover:border-[var(--accent-1)]"
@@ -221,7 +236,7 @@ export function Sidebar({
 
       {/* File List */}
       <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-2">
-        {safeFiles.map((file) => (
+        {files.map((file) => (
           <div
             key={file.name}
             className="p-2.5 rounded-xl bg-black/30 border border-[var(--border-subtle)] flex items-center justify-between group"
@@ -229,11 +244,16 @@ export function Sidebar({
             <div className="min-w-0 flex-1 mr-2">
               <p className="text-xs font-medium text-white truncate">{file.name}</p>
               <p className="text-[10px] text-[var(--text-tertiary)] mt-0.5">
-                {file.status === "ingesting" ? `Processing ${file.progress || 0}%` : `${file.chunks} chunks`}
+                {file.status === "ingesting"
+                  ? `Processing ${file.progress || 0}%`
+                  : file.status === "error"
+                  ? file.error || "Failed"
+                  : `${file.chunks} chunks`}
               </p>
             </div>
             <button
               onClick={() => removeFile(file.name)}
+              aria-label={`Remove ${file.name}`}
               className="text-[var(--text-tertiary)] hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
