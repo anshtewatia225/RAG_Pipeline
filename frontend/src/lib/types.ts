@@ -9,6 +9,8 @@ export interface Source {
 export interface IngestFileReport {
   name: string;
   chunks: number;
+  status?: "success" | "error" | "duplicate";
+  error?: string | null;
 }
 
 export interface DeduplicatedFile {
@@ -43,7 +45,7 @@ export interface IngestedFile {
   name: string;
   chunks: number;
   collection: string;
-  status: "ingesting" | "done" | "error";
+  status: "ingesting" | "done" | "error" | "duplicate";
   error?: string;
   progress?: number;
 }

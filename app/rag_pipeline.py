@@ -101,7 +101,14 @@ class RAGPipeline:
             duplicates = self.vector_store.find_duplicate_files(sha256)
             if duplicates:
                 deduplicated.append({"name": file_name, "duplicate_of": duplicates[0]})
-                files_report.append({"name": file_name, "chunks": 0})
+                files_report.append(
+                    {
+                        "name": file_name,
+                        "chunks": 0,
+                        "status": "duplicate",
+                        "error": f"Identical file already uploaded as '{duplicates[0]}'.",
+                    }
+                )
                 continue
 
             existing = self.vector_store.get_file(file_name)
@@ -110,6 +117,25 @@ class RAGPipeline:
 
             docs = self._load_documents(file_path, file_name)
             chunks = splitter.split_documents(docs)
+
+            if not chunks:
+                extracted_chars = sum(len(doc.page_content.strip()) for doc in docs)
+                logger.warning(
+                    "No extractable text in %s (%d pages, %d non-whitespace chars)",
+                    file_name,
+                    len(docs),
+                    extracted_chars,
+                )
+                message = (
+                    "No pages could be read from this PDF."
+                    if not docs
+                    else "No extractable text found. This looks like a scanned or "
+                    "image-only PDF; OCR is not supported."
+                )
+                files_report.append(
+                    {"name": file_name, "chunks": 0, "status": "error", "error": message}
+                )
+                continue
 
             documents: list[Document] = []
             ids: list[str] = []
@@ -134,7 +160,9 @@ class RAGPipeline:
             self.vector_store.add_documents(
                 documents, ids=ids, file_name=file_name, sha256=sha256
             )
-            files_report.append({"name": file_name, "chunks": len(documents)})
+            files_report.append(
+                {"name": file_name, "chunks": len(documents), "status": "success"}
+            )
             total_chunks += len(documents)
 
         return {

@@ -42,6 +42,7 @@ A full-stack **Retrieval-Augmented Generation (RAG)** application. Upload docume
 - Per-conversation vector collections, deleted together with the conversation.
 - Granular document deletion (removes only that document's chunks).
 - Content-hash de-duplication: re-uploading an identical file is skipped; re-uploading a *changed* file replaces its old chunks (no orphans).
+- Scanned/image-only PDFs are detected and reported with a clear per-file error (OCR is not supported).
 - Context budgeting so top-K chunks never overflow the model window.
 - Configurable relevance threshold with a graceful "no relevant information" response.
 

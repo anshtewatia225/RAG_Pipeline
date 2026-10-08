@@ -80,19 +80,39 @@ export function Sidebar({
           );
         });
 
-        const chunkMap = new Map(res.files.map((f) => [f.name, f.chunks]));
+        const reportMap = new Map(res.files.map((f) => [f.name, f]));
         commitFiles(
-          filesRef.current.map((f) =>
-            names.has(f.name)
-              ? {
-                  ...f,
-                  status: "done" as const,
-                  chunks: chunkMap.get(f.name) ?? 0,
-                  collection: res.collection,
-                  progress: 100,
-                }
-              : f
-          )
+          filesRef.current.map((f) => {
+            if (!names.has(f.name)) return f;
+            const report = reportMap.get(f.name);
+            if (report?.status === "error") {
+              return {
+                ...f,
+                status: "error" as const,
+                chunks: 0,
+                collection: res.collection,
+                error: report.error || "No extractable text found.",
+                progress: 100,
+              };
+            }
+            if (report?.status === "duplicate") {
+              return {
+                ...f,
+                status: "duplicate" as const,
+                chunks: 0,
+                collection: res.collection,
+                error: report.error || "Already uploaded.",
+                progress: 100,
+              };
+            }
+            return {
+              ...f,
+              status: "done" as const,
+              chunks: report?.chunks ?? 0,
+              collection: res.collection,
+              progress: 100,
+            };
+          })
         );
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Failed";
@@ -248,6 +268,8 @@ export function Sidebar({
                   ? `Processing ${file.progress || 0}%`
                   : file.status === "error"
                   ? file.error || "Failed"
+                  : file.status === "duplicate"
+                  ? file.error || "Already uploaded"
                   : `${file.chunks} chunks`}
               </p>
             </div>

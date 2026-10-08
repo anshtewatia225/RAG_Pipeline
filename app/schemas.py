@@ -32,6 +32,8 @@ class ConversationResponse(BaseModel):
 class IngestFileReport(BaseModel):
     name: str
     chunks: int
+    status: str = "success"
+    error: Optional[str] = None
 
 
 class IngestResponse(BaseModel):

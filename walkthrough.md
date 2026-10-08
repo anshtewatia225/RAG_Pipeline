@@ -82,6 +82,11 @@ collection_name)`:
 7. `VectorStore.add_documents(...)` embeds, indexes, and records the file in
    `manifest.json`.
 
+If a file yields no chunks (e.g. a scanned/image-only PDF with no text layer),
+ingestion logs a warning and reports it with `status: "error"` and a readable
+message instead of silently storing nothing. Identical files are reported as
+`status: "duplicate"`. OCR is intentionally out of scope.
+
 The endpoint calls this via `asyncio.to_thread` to avoid blocking the event loop.
 
 ### Manifest
